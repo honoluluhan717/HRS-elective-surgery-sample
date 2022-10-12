@@ -1,0 +1,1959 @@
+= V4 Outline MultiLine NoSorting TabWidth=30
+
+H="set directory"
+// Global Macros use $ symbol to be called. 
+
+global hrs "D:\HRS\Shared\base_data\hrs_cleaned"
+global medi "D:\HRS\Shared\base_data\hrs_cms\Stata"
+
+//Intermediate Data Path
+global intpath "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data"
+
+// Final Data Path
+global datapath "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\final_data"
+
+//Log files path
+global outpath "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\output\in_progress"
+
+
+
+
+
+H="get icd9&10 code of major surgery"
+
+//icd-10 procedure code
+
+clear all
+import delimited "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\PClass_ICD10PCS_v2021-2.csv", rowrange(3)
+
+gen prcdrcd =substr(v1,2,7)
+
+rename v2 pcs_dx
+
+tostring(v3), gen(surg_flag)
+keep if surg_flag == "4"
+
+drop if missing(prcdrcd) | missing(pcs_dx) | missing(surg_flag)
+
+keep prcdrcd pcs_dx
+duplicates drop
+
+save surgdxicd10.dta, replace
+
+
+
+//icd-9 procedure code
+
+clear all
+import delimited "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\pc2015.csv", rowrange(3)
+
+gen prcdrcda =substr(v1,2,4) 
+gen prcdrcd=subinstr(prcdrcda," ", "",.)
+
+rename v2 pcs_dx
+
+keep if v3 == "4"
+
+drop if missing(prcdrcd) | missing(pcs_dx) | missing(v3)
+
+keep prcdrcd pcs_dx
+duplicates drop
+
+save surgdxicd9.dta, replace
+
+
+append using surgdxicd10.dta
+
+save "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\icdfull.dta", replace
+
+H="get icd9&10 of minor + major surgery"
+
+//icd-10 procedure code
+
+clear all
+import delimited "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\PClass_ICD10PCS_v2021-2.csv", rowrange(3)
+
+gen prcdrcd =substr(v1,2,7)
+replace prcdr=subinstr(prcdrcd," ", "",.)
+
+rename v2 pcs_dx
+
+tostring(v3), gen(surg_flag)
+replace surg_flag="1" if surg_flag == "1" | surg_flag == "2" | surg_flag == "3"
+replace surg_flag="2" if surg_flag == "4"
+
+drop if missing(prcdrcd) | missing(pcs_dx) | missing(surg_flag)
+
+keep prcdrcd pcs_dx surg_flag
+duplicates drop
+
+save mm_surgdxicd10.dta, replace
+
+
+//icd-9 procedure code
+
+clear all
+import delimited "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\pc2015.csv", rowrange(3)
+
+gen prcdrcd =substr(v1,2,4)
+replace prcdr=subinstr(prcdrcd," ", "",.)
+
+rename v2 pcs_dx
+drop if _n==1
+
+gen surg_flag="."
+replace surg_flag="1" if v3 == "1" | v3 == "2" | surg_flag == "3"
+replace surg_flag="2" if v3 == "4"
+
+drop if prcdrcd=="." | pcs_dx=="." | surg_flag=="."
+
+keep prcdrcd pcs_dx surg_flag
+
+save mm_surgdxicd9.dta, replace
+
+append using mm_surgdxicd10.dta
+
+save "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\mm_icdfull.dta", replace
+
+
+H="icd9/10 xwalk"
+import sas using "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\icd10to9.sas7bdat", case(lower) clear
+keep icd9 icd10
+gen prcdrcd=icd10
+duplicates drop
+tempfile xwalk
+save `xwalk'
+
+H="get all surgery and trauma ready"
+//getting surgery ready - long format 
+//merging icd9/10 procedure code with medpar
+
+use "D:\HRS\Shared\base_data\hrs_cms\Stata\mp_1998_2018.dta", clear
+
+keep bid_hrs_24 admit_date disch_date prcdr_cd* prcdr_dt* type_adm icarecnt crnryday
+rename prcdr_* prcdr*
+rename prcdrcd0* prcdrcd*
+rename prcdrdt0* prcdrdt*
+rename admit_date index_date
+
+gen num=_n
+drop if missing(prcdrcd1)
+
+reshape long prcdrcd prcdrdt, i (bid_hrs_24 num) j (icd_num)
+drop if missing(prcdrcd)
+
+merge m:1 prcdrcd using  "${intpath}\mm_icdfull.dta", gen(procm)
+
+keep if procm==3
+drop procm
+
+destring surg_flag,replace
+by bid_hrs_24 index_date num, sort: egen a=max(surg_flag)
+replace surg_flag=a
+drop a
+
+duplicates drop num surg_flag, force
+duplicates report
+
+save "${intpath}\mm_prcdrcdicd.dta", replace
+
+keep num prcdrcd bid_hrs_24 index_date disch_date surg_flag
+duplicates drop 
+tab surg_flag,m
+save "${intpath}\mm_allsurg.dta", replace
+
+
+
+
+//getting trauma ready
+//replacing icd10 diag code with icd9 diag code
+
+import sas using "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\icd10to9.sas7bdat", case(lower) clear
+keep icd9 icd10
+gen diag=icd10
+duplicates drop
+tempfile xwalk
+save `xwalk'
+
+use "D:\HRS\Shared\base_data\hrs_cms\Stata\mp_1998_2018.dta", clear
+rename dgns_cd* dgnscd*
+rename dgnscd0* dgnscd*
+rename dgnscd* diag*
+rename dvrsncd0* dvrsncd*
+rename admit_date index_date
+gen num=_n
+keep bid_hrs_24 diag* dvrsncd* num index_date type_adm icarecnt crnryday
+
+gen icd9=dvrsncd1=="9" if !missing(dvrsncd1)
+gen icd9_alt=index_date<td(01oct2015)
+keep bid_hrs_24 index_date dvrsncd* diag* icd9 icd9_alt num type_adm icarecnt crnryday 
+reshape long diag, i(num) j(dnum)
+drop if missing(diag)
+//icd9
+gen trauma=inlist(substr(diag,1,1),"8") | (substr(diag,1,1)=="9" & inlist(substr(diag,2,1),"0","1","2","3","4","5"))
+replace trauma=0 if inrange(real(substr(diag,1,3)),905,909) | inrange(real(substr(diag,1,3)),910,924) | inrange(real(substr(diag,1,3)),930,939)
+//icd10
+replace trauma=1 if (substr(diag,1,1)=="S" & inlist(substr(diag,7,1),"A","B","C")) | inlist(substr(diag,1,3),"T07","T14","T30","T31","T32") | (substr(diag,1,4)=="T79A" & substr(diag,3,1)!="0" & substr(diag,7,1)=="A") | (substr(diag,1,2)=="T2" & substr(diag,3,1)!="9" & substr(diag,7,1)=="A")
+replace trauma=0 if inlist(substr(diag,7,1),"D","G","K","S") | (substr(diag,1,1)=="S" & substr(diag,3,1)=="0")
+
+keep if trauma==1
+drop trauma
+
+joinby diag using `xwalk', unm(master) _merge(xmerge)
+replace diag=icd9cm if !icd9_alt
+drop dvrsncd* icd9 icd9_alt xmerge icd9cm icd10cm 
+save "${intpath}\temp2.dta", replace
+
+//reshape diag from long to wide
+use "${intpath}\temp2.dta", clear
+sort num dnum
+by num: replace dnum=_n
+reshape wide diag, i(num) j(dnum)
+tempfile traum
+save `traum'
+trauma `traum' "${intpath}\icdtrauma.dta" 1 1 diag
+
+//merge trauma and surgery data 
+use "${intpath}\icdtrauma", clear
+keep bid_hrs_24 num index_date xiss type_adm icarecnt crnryday 
+merge 1:m bid num index_date using "${intpath}\mm_allsurg.dta", gen(surgtraumm)
+destring surg_flag, replace
+gen trauma_flag=inrange(xiss,1,75)
+tab surg_flag,m
+replace surg_flag=0 if surg_flag==.
+tab trauma_flag,m
+drop if surg_flag!=2 & trauma_flag!=1
+
+save "$intpath\mm_allsurgtrauma.dta", replace
+
+
+
+
+H="get merge w/ xref and save index dataset"
+use "${medi}\xref2018medicare.dta" , clear
+rename *, l
+joinby bid_hrs_24 using "$intpath\mm_allsurgtrauma.dta"
+gen id=hhid+pn
+
+gen index_year=year(index_date)
+
+save "${intpath}\index.dta", replace
+
+H="get diagnosis for 12m before each index"
+cd "${medi}"
+
+use bid using "${intpath}\index.dta", clear
+duplicates drop
+tempfile idlist
+save `idlist'
+
+foreach x in ip snf hh hs op pb dm {
+	di "`x'"
+	use bid_hrs_24 admit_date dgnscd* using "${medi}/`x'_1998_2018.dta", clear
+	duplicates drop
+	merge m:1 bid using `idlist', keep(match) nogen
+	tempfile `x'1
+	save ``x'1'
+	
+	forvalues y=1998/2018 {
+		di "`x'"
+		di "`y'"
+		use bid_hrs_24 prcdrcd index_* type_adm using "${intpath}\index.dta" if index_year==`y', clear
+		joinby bid using ``x'1'
+		keep if inrange(admit_date,index_date-365,index_date)
+		if _N>0 {
+			rename dgnscd0* dgnscd*
+			gen num=_n
+			reshape long dgnscd, i(num) j(obs)
+			drop num obs admit
+			drop if missing(dgnscd)
+			duplicates drop
+}		
+		tempfile y`y'
+		save `y`y''
+		
+}
+	clear
+	forvalues y=1998/2018 {
+		append using `y`y''
+}
+	duplicates drop
+	tempfile `x'
+	save ``x''
+}
+
+use `ip', clear
+foreach x in snf hh hs op pb dm {
+	append using ``x''
+	keep index_date prcdrcd* bid_hrs_24 type_adm dgnscd*
+	duplicates drop
+}
+
+save "${intpath}\dx_all.dta", replace
+	
+
+H="merge icd10 surgery-specific serious illness"
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Liver disease") firstrow allstring clear
+rename LiverDiseaseAnyappearanceof dgnscd
+gen disease_type="liverdisease"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness1.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Lung disease") firstrow allstring clear
+rename COPDorInterstitiallungdiseas dgnscd
+gen disease_type="Lung disease"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness2.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Renal Failure") firstrow allstring clear
+rename RenaldiseaseAnyappearanceof dgnscd
+gen disease_type="Renal Failure"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness3.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Cancer") firstrow allstring clear
+rename CancerAnyappearanceofthese dgnscd
+gen disease_type="Cancer"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness4.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Heart failure") firstrow allstring clear
+rename HeartFailureonlyifwithany dgnscd
+gen disease_type="Heart Failure"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness5.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("Dementia") firstrow allstring clear
+rename DementiaAnyappearanceofthes dgnscd
+gen disease_type="Dementia"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness6.dta", replace
+
+import excel "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\ref_docs\Serious Illness in Surgery Codes ICD-10.xlsx", sheet("TBI") firstrow allstring clear
+rename TraumaticbrainInjuryifAIS dgnscd
+gen disease_type="TBI"
+duplicates report dgnscd
+return list
+duplicates drop dgnscd, force
+save "${intpath}\serious_illness7.dta", replace
+
+//append all serious illness datasets 
+use "${intpath}\serious_illness1.dta", clear 
+append using "${intpath}\serious_illness2.dta" "${intpath}\serious_illness3.dta" "${intpath}\serious_illness4.dta" "${intpath}\serious_illness5.dta" "${intpath}\serious_illness6.dta" "${intpath}\serious_illness7.dta"
+
+save "${intpath}\serious_illnesses_icd10.dta", replace
+
+//merge dx_all with icd10 serious illness 
+use "${intpath}\dx_all.dta", clear
+merge m:1 dgnscd using "${intpath}\serious_illnesses_icd10.dta"
+drop B _merge
+save "${intpath}\dx_allready.dta", replace
+
+
+
+H="get surgery-specific serious illness"
+use "${intpath}\dx_allready.dta", clear
+keep bid_hrs_24 index_* disease_type dgnscd
+tab disease_type
+
+gen dem1=inlist(substr(dgnscd,1,4),"2900", "2901","2902","2903","2904","2912") | inlist(substr(dgnscd,1,4),"2941","2948","2949","3310","3312") | inlist(substr(dgnscd,1,5),"33111","33119")
+replace dem1=1 if disease_type=="Dementia"
+
+gen canc1=(inlist(substr(dgnscd,1,3),"150","151","196","197","198") & !inlist(substr(dgnscd,1,4),"1506","1507","1517","1967","1979") & !inlist(substr(dgnscd,1,4),"1964","1988","1989")) | inlist(substr(dgnscd,1,4),"1550","1551","1552","1580","1588","1589") | (inlist(substr(dgnscd,1,3),"157") & !inlist(substr(dgnscd,4,1),"5","6","7")) | (inlist(substr(dgnscd,1,3),"162") & !inlist(substr(dgnscd,4,1),"1","6","7")) | (inlist(substr(dgnscd,1,3),"163") &inlist(substr(dgns,4,1),"0","1","8","9")) 
+replace canc1=1 if (inlist(substr(dgnscd,1,3),"183") & !inlist(substr(dgnscd,4,1),"1","6","7")) | inlist(substr(dgns,1,3),"191") | inlist(substr(dgnscd,1,5),"19881","19882","19889") | inlist(substr(dgnscd,1,4),"1990","1991","1992","2040","2041","2042","2048","2049") | inlist(substr(dgnscd,1,4),"2050","2051","2052","2053","2058","2059","2060") | inlist(substr(dgnscd,1,4),"2061","2062","2068","2069","2070","2071") | inlist(substr(dgnscd,1,4),"2072","2078","2080","2081","2082","2088","2089","2890")
+replace canc1=1 if disease_type=="Cancer"
+
+gen esrd1=inlist(substr(dgnsc,1,5),"40311","40391","40412","40492","V4511","V4512") | inlist(substr(dgnscd,1,4),"V560","V420") | substr(dgns,1,3)=="586"
+replace esrd1=1 if disease_type=="Renal Failure"
+
+gen chf1=inlist(substr(dgnscd,1,5),"39891","40211","40291","40411","40413","40491","40493") | inlist(substr(dgnscd,1,4),"4280","4281","4282","4283","4284","4289") |inlist(substr(dgnscd,1,5),"42821","42822","42823","42831","42832","42833","42841","42842","42843")
+replace chf1=1 if disease_type=="Heart Failure"
+
+gen copd1=inlist(substr(dgnscd,1,3),"490","491","492","494","495","496","497") | inlist(substr(dgnscd,1,3),"498","499","500","501","502","503","504","505") | inlist(substr(dgnscd,1,4),"4928","4930","4931","4939","5064","4932") | inlist(substr(dgnscd,1,5),"49381","49382")
+replace copd1=1 if disease_type=="Lung Disease"
+
+gen liver1=inlist(substr(dgnscd,1,4),"4560","4561","4562","5710","5712","5715","5716") | inlist(substr(dgnscd,1,4),"5718","5719","5723","5724","5728","V427")
+replace liver1=1 if disease_type=="Liver Disease"
+
+
+foreach x in dem canc esrd chf copd liver {
+	by bid_hrs_24 index_date, sort: egen ind_`x'=max(`x'1)
+}
+
+drop dgnscd *1 disease_type
+duplicates drop
+
+tempfile dx
+save `dx'
+
+use "${intpath}\icdtrauma",clear
+rename index_date admit_date 
+tempfile trauma
+save `trauma'
+
+
+use "${intpath}\index.dta", clear
+sort bid_hrs_24 index_date
+by bid_hrs_24: gen index_date_n1=index_date[_n-1]
+tempfile t
+save `t'
+foreach x in mp  {
+	forvalues y=1998/2018 {
+		use `t' if index_year==`y', clear
+		joinby bid_hrs_24 using `trauma'
+		keep if inrange(admit_date,index_date-365,index_date)
+		gen st=inrange(niss,25,75) | (((icarecnt>0 & !missing(icarecnt)) | (crnryday>0 & !missing(crnryday))) & niss>0)
+		gen tbi=inrange(mxaisbr1,4,6)
+		by bid_hrs_24 index_date, sort: egen ind_severe_trauma=max(st)
+		by bid_hrs_24 index_date: egen ind_tbi=max(tbi)
+		keep bid_hrs_24 index_date ind_sev ind_tbi
+		duplicates drop
+		tempfile y`y'
+		save `y`y''
+		
+}
+	clear
+	forvalues y=1998/2018 {
+		append using `y`y''
+}
+	duplicates drop
+	tempfile `x'
+	save ``x''
+}
+
+
+//get supplementary info: oxygen 
+use "D:\HRS\Shared\base_data\hrs_cms\Stata\dm_1998_2018.dta", clear
+keep bid_hrs_24 admit_date betos*
+tempfile dm 
+save `dm'
+
+forvalues y=1998/2018 {
+
+use "${intpath}\index.dta" if index_year==`y', clear
+		joinby bid using  `dm'
+		keep if inrange(admit_date,index_date-365,index_date)
+		rename betos0* betos*
+		gen oxygen=0
+		forvalues i=1/13 {
+			replace oxygen=1 if betos`i'=="D1C"
+}
+		drop betos* admit
+		keep if oxy==1
+		duplicates drop
+		tempfile dm`y'
+		save `dm`y''
+}
+
+clear
+forvalues y=1998/2018 {
+	append using `dm`y''
+}
+
+keep bid index_date oxygen 
+duplicates drop
+tempfile dm	
+save `dm'
+
+cd "${intpath}"
+
+use bid_hrs_24 admit_date er_amt sslssnf using"${medi}\mp_1998_2018.dta" if ssl!="N", clear
+gen ip=1
+drop s
+duplicates drop
+tempfile mper
+save `mper'
+
+
+use bid_hrs_24 admit_date rvcntr* using "D:\HRS\Shared\base_data\hrs_cms\Stata\op_1998_2018.dta", clear
+
+gen op_er=.
+rename rvcntr0* rvcntr*
+forvalues i=1/45{
+replace op_er=1 if substr(rvcntr`i',1,3)=="045" | rvcntr`i'=="0981"
+}
+
+keep if op_er==1
+drop rvcntr*
+
+duplicates drop
+append using `mper'
+tempfile t8
+save `t8'
+
+
+use bid index_date id using index.dta, clear
+duplicates drop
+
+joinby bid using  `t8', unmatched(both)
+gen inrange=inrange(admit_date,index_date-365,index_date-1) & ip==1
+gen inr2=inrange(admit_date,index_date-183,index_date-1) & ((er_amt>0 & !missing(er_amt)) | op_er==1)
+gen inrange2=inrange(admit_date,index_date-183,index_date-1) & ip==1
+
+by id, sort: egen n_hosp_adm_n12m=total(inrange)
+by id, sort: egen n_hosp_adm_n6m=total(inrange2)
+by id, sort: egen n_edvis_n6m=total(inr2)
+drop admit inrange inr2 er_amt op_er ip inrange2
+duplicates drop
+tempfile t9
+save `t9'
+
+
+use "${intpath}\index.dta", clear
+merge m:1 bid_hrs_24 index_date using `dx', keep(match master) gen(dxm)
+merge m:1 bid_hrs_24 index_date using `mp', keep(match master) gen(mpm)
+merge m:1 bid_hrs_24 index_date using `dm', keep(match master) gen(dmm)
+merge m:1 bid_hrs_24 index_date using `t9', keep(match master) gen(t99)
+drop dxm mpm dmm
+
+save "${intpath}\sidiag.dta", replace
+
+H="***************"
+
+
+H="get frailty files"
+cd $intpath
+use index, clear
+tostring index_date, gen(idate)
+gen patid=bid_hrs_24+idate
+export delimited "ids.txt", delimiter(tab) replace
+
+use dx_all.dta, clear
+tostring index_date, gen(idate)
+gen patid=bid_hrs_24+idate
+rename dgnscd dx
+preserve
+keep if index_date<=td(01oct2015) | inlist(substr(dx,1,1),"0","1","2","3","4") | inlist(substr(dx,1,1),"5","6","7","8","9")
+export delimited "dx09.txt", delimiter(tab) replace
+restore
+drop if index_date<=td(01oct2015) | inlist(substr(dx,1,1),"0","1","2","3","4") | inlist(substr(dx,1,1),"5","6","7","8","9")
+export delimited "dx10.txt", delimiter(tab) replace
+
+local yr 06
+foreach x in ip op pb dm {
+				di "`x' `i'"
+		use bid_hrs_24 admit_date hcpscd* using "${medi}/`x'_1998_2018.dta" if !missing(hcpscd01), clear 
+		rename hcpscd0* hcpscd*
+
+		joinby bid_hrs_24 using index
+		keep if inrange(admit_date,index_date-365,index_date)
+		tostring index_date, replace
+		gen patid=bid_hrs_24+index_date
+		drop num
+		gen num=_n
+		reshape long hcpscd, i(num) j(count)
+		keep patid hcpscd
+		rename hcpscd px
+		drop if missing(px)
+		duplicates drop
+		tempfile `x'
+		save ``x''		
+		local yr 09
+
+}
+
+
+clear
+foreach x in ip op pb dm {
+		append using ``x''
+
+}
+duplicates drop
+export delimited "px.txt", delimiter(tab) replace
+
+H="get frailty"
+* CFI Model ICD10
+* Versioned in Stata V16 based upon original SAS code provided by Dae Hyun Kim
+* Authored by: Doug Bedell at Westat
+
+* This code reads in relevant CFI datasets from provided code base,
+* and outputs a CFI Measure for each patient.
+
+* NOTE: Implemented using standard Stata without extensions. For large data sets
+* this may not be the most efficient method. Consider replacing the full
+* pair-wise CROSS calls with another method such as RANGEJOIN from SSC.
+* Load rangejoin from SSC for ranged lookups
+* If rangejoin not installed, install first with this line
+* ssc install rangejoin
+
+* Set input/output path for files
+cd $intpath
+clear
+
+* Read in all study IDs (patid)
+import delimited "ids.txt"
+save "ids.dta", replace
+clear
+
+* Read in ICD-9 DX data (patid, dx)
+import delimited "dx09.txt", stringcols(2)
+destring *, replace
+save "dx09.dta", replace
+clear
+
+* Read in ICD-9 DX lookup data
+import delimited using "CFI_ICD9CM_V32.csv", stringcols(2)
+drop description icd_ver
+save "dx9lookup.dta", replace
+clear
+
+* Read in ICD-10 DX data (patid, dx)
+import delimited "dx10.txt"
+save "dx10.dta", replace
+clear
+
+* Read in ICD-10 DX lookup data
+import delimited "CFI_ICD10CM_V2020.csv"
+drop description icd_ver
+save "dx10lookup.dta", replace
+clear
+
+* Read in PX data (patid, px)
+import delimited "px.txt"
+drop if _n==1
+rename v1 px
+rename v2 patid
+save "px.dta", replace
+clear
+
+* Read in PX lookup data. Implements PX section of SAS codes_org.
+import delimited "pxlookup_stata.txt"
+save "pxlookup_stata.dta", replace
+clear
+
+* Read in model disease weights lookup
+import delimited "disease_weight.txt"
+save "disease_weight.dta", replace
+clear
+
+* NOTE: Since we only need to score each DX/PX once per patient, remove duplicates
+* prior to any lookup.
+* Get disease numbers for ICD-9 diagnoses file.
+use dx09
+duplicates drop
+joinby dx using dx9lookup
+drop dx
+sort patid disease_number
+save "dx09.dta", replace
+clear
+
+* Get disease numbers for ICD-10 diagnoses file
+use dx10
+duplicates drop
+joinby dx using dx10lookup
+drop dx
+sort patid disease_number
+save "dx10.dta", replace
+clear
+
+* Get disease numbers for procedures file
+use px
+duplicates drop
+cross using pxlookup_stata
+keep if inrange(px,start,stop)
+* Remove any row having a procedure code less than 5 chars or ending in a letter
+drop if strlen(px) !=5 | uisletter(substr(px,5,1))
+drop px start stop
+sort patid disease_number
+save "px.dta", replace
+clear
+
+* Assign dummy disease_number = 0 for all study IDs.
+* This will have the effect of assigning the default weight (ModelIntercept)
+* for any PatID that is not included in the DX9, DX10 or PX file
+use ids
+duplicates drop
+generate disease_number = 0
+save "ids.dta", replace
+clear
+
+* Combine the data, keeping only patient ID and disease number
+use dx09, clear
+append using dx10
+append using px
+destring index_date, replace
+append using ids
+
+* Remove duplicates. Each DX/PX should only be weighted once.
+duplicates drop
+sort patid disease_number
+save "diseasedatasort.dta", replace
+clear
+
+* Assign weights
+* Merge the disease weights on to the disease data
+use diseasedatasort
+duplicates drop
+joinby disease_number using disease_weight, unmatched(master)
+drop _merge
+* Ensure missings are set to 0 so patients without DX or PX do not get dropped
+replace weight = 0 if missing(weight)
+sort patid disease_number
+save "diseasedatasort.dta", replace
+clear
+
+* Calculate frailty scores by summing the weights of records grouped by patient ID.
+* ModelIntercept value added to every score. Default score for those with no DX/PX.
+use diseasedatasort, clear
+drop disease_number
+collapse (sum) weight, by(patid)
+* Derived from trained model, ModelIntercept = 0.10288
+* Store in double, not float. Otherwise decimal precision is wrong
+generate double frailty_index = round(weight + 0.10288, 0.00001)
+drop weight
+
+gen bid_hrs_24=substr(patid,1,10)
+gen index_date=substr(patid,11,5)
+destring index_date, replace
+format index_date %td
+save "scores.dta", replace
+
+* Write to CSV
+use scores, replace
+export delimited "frailty_output_stata.csv", replace
+
+
+H="get ffs"
+use bid_hrs_24 start_dt ab_mo_cnt hmo_mo using "D:\HRS\Shared\base_data\hrs_cms\Stata\bqsf_1998_2018.dta", clear
+gen ffs=ab_mo_cnt>=1 & hmo_mo==0
+drop *mo*
+tempfile bqsf
+save `bqsf'
+
+forvalues i=1998/2018 {
+use id bid_hrs_24 index_date index_year using "${intpath}\index.dta" if year(index_date)==`i', clear
+joinby bid using `bqsf'
+keep if start_dt<=index_date
+gsort id index_date -start_dt
+by id index_date: gen num=_n
+drop start_dt
+reshape wide ffs, i(id index_date) j(num)
+gen cont_ffs_n_mos=0
+if year(index_date)==1998 {
+forvalues y=1/4 {
+	replace cont_ffs_n_mos=cont_ffs_n_mos+3 if ffs`y'==1 & cont_ffs_n_mos==`y'*3-3
+}
+}
+
+else if year(index_date)==1999 {
+forvalues y=1/8 {
+	replace cont_ffs_n_mos=cont_ffs_n_mos+3 if ffs`y'==1 & cont_ffs_n_mos==`y'*3-3
+}
+}
+
+else if year(index_date)>=2000 {
+forvalues y=1/12 {
+	replace cont_ffs_n_mos=cont_ffs_n_mos+3 if ffs`y'==1 & cont_ffs_n_mos==`y'*3-3
+}
+}
+
+drop ffs*
+tempfile ffs`i'
+save `ffs`i''
+}
+clear
+forvalues i=1998/2018 {
+append using `ffs`i''
+}
+
+save "${intpath}\ffs.dta", replace
+
+H="combine all data"
+cd "${intpath}"
+
+/*
+//drop duplicates for individual data
+//sample with id/index_date/trauma_flag/surg_flag *20089
+use index.dta, clear
+duplicates report bid_hrs_24 index_date
+return list
+duplicates drop bid_hrs_24 index_date, force
+save indexf.dta, replace
+
+
+//get diag for 12 months before each index *9009
+use dx_allready.dta, clear 
+duplicates report
+duplicates report bid_hrs_24 index_date
+return list
+duplicates drop bid_hrs_24 index_date, force
+save dx_allreadyf.dta, replace
+*/
+
+//get surgery-specific serious illness *9025
+use sidiag.dta, clear
+duplicates report
+duplicates drop
+duplicates report bid_hrs_24 index_date trauma_flag
+return list
+duplicates drop bid_hrs_24 index_date, force
+drop if index_date==.
+drop if yob=="0"
+drop if yob=="0000"
+destring(yob),replace
+destring(mob),replace
+gen age=index_year-yob
+replace age=age-1 if mob>month(index_date)
+keep bid_hrs_24 prcdrcd index_date age sex surg_flag trauma_flag index_year ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma ind_tbi type_adm xiss oxygen n_hosp_adm_n12m n_hosp_adm_n6m n_edvis_n6m
+save sidiagf.dta, replace
+
+//get frailty 
+use scores.dta, clear
+duplicates report bid_hrs_24 index_date
+drop if index_date==.
+save scoresf.dta, replace
+
+//get ffs 
+use ffs.dta, clear
+duplicates report bid_hrs_24 index_date
+drop if index_date==.
+save ffsf.dta, replace
+
+
+//combine sidiagf, scoresf, and ffsf into one dataset
+use sidiagf.dta, clear
+merge 1:1 bid_hrs_24 index_date using scoresf.dta
+
+drop if _merge==2
+drop _merge
+
+merge 1:1 bid_hrs_24 index_date using ffsf.dta
+keep if _merge==3
+drop _merge
+drop patid
+
+save final_data.dta, replace
+
+
+
+H="merged to HRS core& exit"
+use "D:\HRS\Shared\base_data\hrs_cms\Stata\xref2018medicare.dta", clear
+rename BID_HRS_24 bid_hrs_24
+duplicates report bid_hrs_24
+
+merge 1:m bid_hrs_24 using "${intpath}/final_data.dta"
+keep if _merge==3
+drop _merge
+save "${intpath}/merge1.dta", replace
+
+use "D:\HRS\Shared\base_data\hrs_cleaned\restr_tracker_v2016.dta", clear
+drop if _n==1
+gen hhidpn=hhid+pn
+
+//keep variables available in the tracker 
+gen race_eth=.
+replace race_eth=1 if race==1
+replace race_eth=2 if race==2
+replace race_eth=3 if race==7
+replace race_eth=4 if (hisp_eth==1) | (hisp_eth==2) | (hisp_eth==3)
+label define e 1 "White, non-hispanic" 2 "Black, non-hispanic" 3 "Other, non-hispanic" 4 "Hispanic"
+label values race_eth e
+tab race_eth
+
+gen education=.
+replace education=0 if degree==0
+replace education=1 if degree==1 | degree==2
+replace education=2 if degree==3 | degree==4
+replace education=3 if degree==5 | degree==6
+replace education=. if degree==9
+label define k 0 "< high school" 1 "high school" 2 "college/some college" 3 "post graduate" 4 "missing"
+label values education k
+tab education
+
+
+merge 1:m hhidpn using "${intpath}/merge1.dta",force
+keep if _merge==3
+drop _merge
+save "${intpath}/merge2.dta", replace
+
+use "D:\HRS\Shared\base_data\hrs_cleaned\core_00_to_18.dta", clear
+append using "D:\HRS\Shared\base_data\hrs_cleaned\exit_02_to_16_dt.dta"
+
+//recode descriptive vars
+gen ind_marital=.
+replace ind_marital=0 if marital==1
+replace ind_marital=1 if marital!=1 & hhm>=1
+replace ind_marital=2 if marital!=1 & hhm==0
+label define d 0 "married" 1 "not married and living with others" 2 "not married and living alone"
+label values ind_marital d
+tab ind_marital
+
+tab cesd_tot
+gen cesd_binary=cesd_tot>=3
+tab cesd_binary
+
+gen pain_binary=.
+replace pain_binary=1 if pain_hrs==1 & (pain_level_hrs==2 | pain_level_hrs==3)
+replace pain_binary=0 if pain_hrs==0 | pain_level_hrs==1
+tab pain_binary
+
+tab nw_quart
+tab nhres
+
+//create before & after
+gen year=core_year
+replace year=exit_year if missing(year)
+gen core=!missing(core_year)
+keep id hhid pn year core c_ivw_date e_ivw_date ind_marital nw_quart nhres  adl_independent_core iadl_independent_core cesd_binary pain_binary
+
+gen ivw_date=c_ivw_date
+replace ivw_date=e_ivw_date if missing(ivw_date)
+
+keep id hhid pn year core ivw_date ind_marital nw_quart nhres c_ivw_date cesd_binary pain_binary adl_independent_core iadl_independent_core
+
+gen hhidpn=hhid+pn
+joinby hhidpn using "${intpath}/merge2.dta"
+
+gen before=ivw_date<index_date
+gen after=ivw_date>index_date
+
+by hhidpn index_date, sort: egen hasbefore=max(before)
+by hhidpn index_date, sort: egen hasafter=max(after)
+
+gen time=index_date-ivw_date
+gen inr_n1=inrange(time,0,730)
+gen inr_p1=inrange(time,-730,0)
+by hhidpn index_date, sort: egen has2before=max(inr_n1)
+by hhidpn index_date, sort: egen has2after=max(inr_p1)
+
+drop if inr_n1!=1
+sort hhidpn index_date ivw_date
+by hhidpn index_date: keep if _n==_N
+
+by hhidpn index_date: gen timefromsy=mofd(index_date)-mofd(c_ivw_date)
+sum timefromsy
+
+//recode xiss
+gen injury_severity_score=.
+replace injury_severity_score=0 if xiss<9
+replace injury_severity_score=1 if xiss>=9 & xiss<15
+replace injury_severity_score=2 if xiss>=15
+label define op 0 "mild" 1 "moderate" 2 "severe"
+label values injury_severity_score op
+tab injury_severity_score
+
+//recode age and gender 
+recode gender(1=0)(2=1)
+label define rt 0 "male" 1 "female"
+label values gender rt
+tab gender
+
+gen agenew=.
+replace agenew=0 if age>=66 & age<75
+replace agenew=1 if age>=75 & age<85
+replace agenew=2 if age>=85
+replace agenew=9 if age<66
+label define P 0 "[66,75)" 1 "[75,85)" 2 "[85" 9 "<66"
+label values agenew P
+tab agenew
+
+gen ind_frail=inrange(frailty_index,0.25,1)
+
+keep hhidpn index_date prcdrcd bid_hrs_24 year has* type_adm inr_n1 inr_p1 has2before has2after race_eth education ind_marital nw_quart nhres agenew gender timefromsy pain_binary cesd_binary adl_independent_core iadl_independent_core injury_severity_score surg_flag trauma_flag ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma ind_tbi cont_ffs_n_mos ind_frail oxygen n_hosp_adm_n12m n_hosp_adm_n6m n_edvis_n6m age
+duplicates drop 
+
+save "${intpath}/hrsmerged.dta",replace
+
+
+
+
+
+
+H="merge to chars, pdem, & helper data "
+
+use "D:\HRS\Shared\base_data\hrs_cleaned\helper_hours_2018.dta", clear
+rename id hhidpn
+
+gen ind_caregiver=.
+replace ind_caregiver=0 if n_f!=0 & n_i==0
+replace ind_caregiver=1 if n_i!=0 & n_f==0
+replace ind_caregiver=2 if n_f!=0 & n_i!=0
+replace ind_caregiver=3 if n_f==0 & n_i==0
+label define r 0 "paid help only" 1 "unpaid help only" 2 "had both helpers" 3 "no helpers"
+label values ind_caregiver r
+tab ind_caregiver
+
+gen helphours_3cat=.
+replace helphours_3cat=1 if hlphrs_i==0 
+replace helphours_3cat=2 if hlphrs_i>0 & hlphrs_i<30
+replace helphours_3cat=3 if hlphrs_i>=30
+label define u 1 "none" 2 "0<unpaid caregiving hrs/month<30" 3 "unpaid caregiving hours>=30 hrs/month"
+label values helphours_3cat u
+tab helphours_3cat,m
+
+gen informal_final=hlphrs_i>=30
+tab informal_final,m
+
+keep hhidpn ind_caregiver year helphours hlphrs_i helphours_3cat informal_final
+merge 1:m year hhidpn using "${intpath}/hrsmerged.dta"
+drop if _merge==1
+drop _merge
+save "${intpath}/t.dta", replace
+
+use "D:\HRS\Shared\base_data\hrs_cleaned\pdem_withvarnames_00_16.dta", clear
+sort id core_year
+by id: carryforward pdem,replace
+gen prob_dem=pdem>=.5 if !missing(pdem)
+
+tab prob_dem,m
+rename id hhidpn
+rename core_year year
+
+keep hhidpn year prob_dem pdem pdem3
+merge 1:m hhidpn year using "${intpath}/t.dta"
+drop if _merge==1
+drop _merge
+tab prob_dem
+save "${intpath}/w.dta", replace
+
+import sas using "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\charls_0d_n12m.sas7bdat",case(lower)clear
+tab charls_index_wt_0d_n12m
+keep bid_hrs_24 index_date charls_index_wt_0d_n12m
+merge 1:m  bid_hrs_24 index_date using "${intpath}/w.dta"
+drop if _merge==1
+drop _merge
+tab charls_index_wt_0d_n12m
+
+merge m:1 hhidpn index_date using "${intpath}/hrsmerged.dta"
+gen ind_vunerable= agenew==2 | pdem3<0.5 | adl_independent_core==0 
+keep if _merge==3
+drop _merge
+
+recode ind_caregiver(.=3)
+
+//apply 4 selection criteria 
+sort hhidpn index_date
+
+keep if year>=2008
+
+replace ind_copd=0 if !oxygen | missing(oxygen)
+replace ind_dem=0 if !n_hosp_adm_n12m
+replace ind_chf=0 if !n_hosp_adm_n6m & n_edvis_n6m<2
+
+egen ind_si_any=rowmax(ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma ind_tbi ind_frail nhres ind_vunerable)
+keep if ind_si_any==1
+
+gen ffs12=cont_ffs_n_mos>=12 & !missing(cont_ffs_n_mos)
+keep if ffs12==1
+
+keep if agenew!=9
+
+//fill prob_dem missing 
+by hhidpn: replace pdem=pdem[_n-1] if year==2018
+replace prob_dem=pdem>=.5 if !missing(pdem)
+tab prob_dem,m
+
+save "${intpath}/March_abstract.dta", replace
+
+
+H="elective surgery sample"
+/*
+elective surgery cohort
+inlcusion criteria: has major surgery 
+exclusion criteria: patients has no trauma during surgical admission
+*/
+use "${intpath}/March_abstract.dta",clear
+tab surg_flag
+
+keep if surg_flag==2
+
+drop if trauma_flag==1 
+
+drop type_adm 
+rename index_date admit_date
+
+sort bid_hrs_24 admit_date
+merge 1:m bid_hrs_24 admit_date using "D:\HRS\Shared\base_data\hrs_cms\Stata\mp_1998_2018.dta"
+keep if _merge==3
+
+keep if type_adm=="3"
+
+save "${intpath}/March_abstract_elective_surg.dta",replace
+
+H="*****************"
+
+
+H="home discharge + hospital days + complications"
+use "${intpath}/March_abstract_elective_surg.dta", clear
+
+//hospital days
+sum loscnt 
+
+//home discharge 
+tab dstntncd
+gen home_discharge=(dstntncd==1 | dstntncd==6) 
+tab home_discharge
+
+//in-hospital complications 
+rename dgns_cd* diag*
+rename diag0* diag*
+gen num=_n
+reshape long diag, i (bid_hrs_24 num) j (diag_num)
+
+
+
+//apply complications code
+//get complications 
+//note--only have ICD-9, need to get 10 from Zara at some point
+gen ind_comp_intraop=inlist(substr(diag,1,3),"900","901","902","903","904") & num>1
+replace ind_comp_intraop=1 if inlist(substr(diag,1,4),"4582","5121","9982","9991") & num>1
+replace ind_comp_intraop=1 if inlist(substr(diag,1,5),"41511") & num>1
+gen ind_comp_cardiac=inlist(substr(diag,1,3),"410","411") & num>1
+replace ind_comp_cardiac=1 if inlist(substr(diag,1,4),"4275","9971","4294") & num>1
+
+gen ind_comp_resp=inlist(substr(diag,1,3),"480","481","482","483","485","486","514") & num>1
+replace ind_comp_resp=1 if inlist(substr(diag,1,4),"5070","5184","5185","7991","9973") & num>1
+replace ind_comp_resp=1 if inlist(substr(diag,1,5),"51881") & num>1
+
+gen ind_comp_vasc=1 if inlist(substr(diag,1,3),"430","431","433","434","435","436","451","453") & num>1
+replace ind_comp_vasc=1 if inlist(substr(diag,1,4),"4151","442","4448","4599","9972","9997","9992") & num>1
+
+gen ind_comp_wound=1 if inlist(substr(diag,1,3),"567") & num>1
+replace ind_comp_wound=1 if inlist(substr(diag,1,4),"5688","5697","6088","9981","9983","9986") & num>1
+replace ind_comp_wound=1 if inlist(substr(diag,1,5),"99814","99851") & num>1
+
+gen ind_comp_genitourinary=1 if inlist(substr(diag,1,3),"590","591","596","597","604") & num>1
+replace ind_comp_genitourinary=1 if inlist(substr(diag,1,4),"5933","5934","5935","5991","7882","9963","9975") & num>1
+
+gen ind_comp_gastro=1 if inlist(substr(diag,1,3),"558","560") & num>1
+replace ind_comp_gastro=1 if inlist(substr(diag,1,4),"5311","5312","5321","5322","5323","5401","7876") & num>1
+replace ind_comp_gastro=1 if inlist(substr(diag,1,4),"9974","5692","5693","5695","5696","5793") & num>1
+replace ind_comp_gastro=1 if inlist(substr(diag,1,5),"00845") & num>1
+
+gen ind_comp_neuro=1 if inlist(substr(diag,1,3),"436","951","952","953","954","955","956","354","355") & num>1
+replace ind_comp_neuro=1 if inlist(substr(diag,1,4),"9970","7234") & num>1
+
+gen ind_comp_infect=1 if inlist(substr(diag,1,3),"038") & num>1
+replace ind_comp_infect=1 if inlist(substr(diag,1,4),"9985","9993","0545","7907") & num>1
+replace ind_comp_infect=1 if inlist(substr(diag,1,5),"53641","51901","99591","99592") & num>1
+
+gen ind_comp_misc=1 if inlist(substr(diag,1,3),"584") & num>1
+replace ind_comp_misc=1 if inlist(substr(diag,1,4),"0418","2768","4589","7823","7824","7855","9950","9954","9994") & num>1
+replace ind_comp_misc=1 if inlist(substr(diag,1,4),"9996","9997","9984","9987","9988","9989","5364","5793") & num>1
+replace ind_comp_misc=1 if inlist(substr(diag,1,5),"99586") & num>1
+
+//icd10
+
+
+
+
+replace ind_comp_intraop=1 if inlist(diag, "0DTE0ZZ", "0FB40ZZ", "0FB43ZZ", "6A800ZZ", "8E0H300", "D7811", "D7812", "E3611") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "E3612", "G9748", "G9749", "H59219", "H59229", "H9531", "H9532", "I2690") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "I2699", "I952", "I953", "I9581", "I9751", "I9752", "J9571", "J9572") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "J95811", "K9171", "K9172", "L7611", "L7612", "M96820", "M96821", "N9971") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "N9972", "NoPCS", "S090XXA", "S15009A", "S15209A", "S15309A", "S158XXA", "S159XXA") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S2500XA", "S25109A", "S2520XA", "S25309A", "S25409A", "S25509A", "S25809A", "S2590XA") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S3500XA", "S3510XA", "S35219A", "S35229A", "S35239A", "S35299A", "S35319A", "S35329A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S35339A", "S35349A", "S35403A", "S35406A", "S35513A", "S35516A", "S35533A", "S35536A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S3559XA", "S358X9A", "S3590XA", "S45009A", "S45109A", "S45209A", "S45809A", "S45909A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S55009A", "S55109A", "S55809A", "S55909A", "S65009A", "S65109A", "S65209A", "S65309A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S65409A", "S65509A", "S65809A", "S65909A", "S75009A", "S75109A", "S75209A", "S75809A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S75909A", "S85009A", "S85109A", "S85139A", "S85169A", "S85309A", "S85409A", "S85509A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "S85809A", "S85909A", "S95109A", "S95809A", "S95902A", "T1490", "T800XXA", "T81718A") & num>1
+replace ind_comp_intraop=1 if inlist(diag, "T8172XA", "T82817A", "T82818A", "T888XXA") & num>1
+
+
+
+replace ind_comp_cardiac=1 if inlist(diag, "079P30Z", "079P3ZZ", "079P40Z", "079P4ZZ", "30230AZ", "30230G0", "30230G1", "30230X0") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30230X1", "30230Y0", "30230Y1", "30233AZ", "30233G0", "30233G1", "30233X0", "30233X1") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30233Y0", "30233Y1", "30240AZ", "30240G0", "30240G1", "30240X0", "30240X1", "30240Y0") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30240Y1", "30243AZ", "30243G0", "30243G1", "30243X0", "30243X1", "30243Y0", "30243Y1") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30250G0", "30250G1", "30250X0", "30250X1", "30250Y0", "30250Y1", "30253G0", "30253G1") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30253X0", "30253X1", "30253Y0", "30253Y1", "30260G0", "30260G1", "30260X0", "30260X1") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "30260Y0", "30260Y1", "30263G0", "30263G1", "30263X0", "30263X1", "30263Y0", "30263Y1") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "3E03005", "3E03305", "3E04005", "3E04305", "3E05005", "3E05305", "3E06005", "3E06305") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "6A550Z3", "I200", "I2109", "I2111", "I2119", "I2129", "I213", "I214") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "I240", "I241", "I248", "I469", "I970", "I97110", "I97130", "I97190") & num>1
+replace ind_comp_cardiac=1 if inlist(diag, "I97710", "I97790", "I9788", "I9789") & num>1
+
+
+replace ind_comp_resp=1 if inlist(diag, "0D1N0Z4", "0D1N4Z4", "0D5P0ZZ", "0D5P3ZZ", "0D5P4ZZ", "0D5P7ZZ", "0D5P8ZZ", "0D9P00Z") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0D9P0ZX", "0D9P0ZZ", "0D9P30Z", "0D9P3ZX", "0D9P3ZZ", "0D9P40Z", "0D9P4ZX", "0D9P4ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0D9P7ZX", "0D9P7ZZ", "0D9P8ZX", "0D9P8ZZ", "0DBP0ZX", "0DBP0ZZ", "0DBP3ZX", "0DBP3ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0DBP4ZX", "0DBP4ZZ", "0DBP7ZX", "0DBP7ZZ", "0DBP8ZX", "0DBP8ZZ", "0DCP0ZZ", "0DCP3ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0DCP4ZZ", "0DJD3ZZ", "0DJD4ZZ", "0DJD7ZZ", "0DJD8ZZ", "0DTN0ZZ", "0DTN4ZZ", "0DTP0ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0DTP4ZZ", "0DTP7ZZ", "0DTP8ZZ", "0F758ZZ", "0F768ZZ", "0F788ZZ", "0F798ZZ", "0F7C8DZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0F7C8ZZ", "0F9970Z", "0F9C80Z", "0F9C8ZZ", "0FC50ZZ", "0FC60ZZ", "0FC80ZZ", "0FC90ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0FF50ZZ", "0FF53ZZ", "0FF54ZZ", "0FF57ZZ", "0FF60ZZ", "0FF63ZZ", "0FF64ZZ", "0FF67ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0FF80ZZ", "0FF83ZZ", "0FF84ZZ", "0FF87ZZ", "0FF90ZZ", "0FF93ZZ", "0FF94ZZ", "0FF97ZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0FFC0ZZ", "0FFC3ZZ", "0FFC4ZZ", "0FFC7ZZ", "0PQC0ZZ", "0PQC3ZZ", "0PQC4ZZ", "0PQCXZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0PQD0ZZ", "0PQD3ZZ", "0PQD4ZZ", "0PQDXZZ", "0PQF0ZZ", "0PQF3ZZ", "0PQF4ZZ", "0PQFXZZ") & num>1
+replace ind_comp_resp=1 if inlist(diag, "0PQG0ZZ", "0PQG3ZZ", "0PQG4ZZ", "0PQGXZZ", "6A550Z0", "A481", "J120", "J121") & num>1
+replace ind_comp_resp=1 if inlist(diag, "J122", "J1281", "J1289", "J129", "J13", "J14", "J150", "J151") & num>1
+replace ind_comp_resp=1 if inlist(diag, "J1520", "J15211", "J15212", "J1529", "J153", "J154", "J155", "J156") & num>1
+replace ind_comp_resp=1 if inlist(diag, "J157", "J158", "J159", "J160", "J168", "J180", "J181", "J182") & num>1
+replace ind_comp_resp=1 if inlist(diag, "J189", "J690", "J810", "J811", "J951", "J952", "J953", "J95821") & num>1
+replace ind_comp_resp=1 if inlist(diag, "J95822", "J95851", "J95859", "J9588", "J9589", "J9600", "J9620", "J9690") & num>1
+replace ind_comp_resp=1 if inlist(diag, "R092") & num>1
+
+
+replace ind_comp_vasc=1 if inlist(diag, "0D16074", "0D160J4", "0D160K4", "0D160Z4", "0D163J4", "0D16474", "0D164J4", "0D164K4") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D164Z4", "0D16874", "0D168J4", "0D168K4", "0D168Z4", "0D560ZZ", "0D563ZZ", "0D564ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D567ZZ", "0D568ZZ", "0D580ZZ", "0D583ZZ", "0D584ZZ", "0D587ZZ", "0D588ZZ", "0D590ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D593ZZ", "0D594ZZ", "0D597ZZ", "0D598ZZ", "0D770ZZ", "0D773ZZ", "0D774ZZ", "0D777ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D778ZZ", "0D870ZZ", "0D873ZZ", "0D874ZZ", "0D877ZZ", "0D878ZZ", "0D958ZX", "0D9600Z") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D960ZZ", "0D9630Z", "0D963ZZ", "0D9640Z", "0D964ZZ", "0D967ZZ", "0D968ZX", "0D968ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D980ZX", "0D983ZX", "0D984ZX", "0D987ZX", "0D990ZX", "0D993ZX", "0D994ZX", "0D997ZX") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D998ZX", "0D9A0ZX", "0D9A3ZX", "0D9A4ZX", "0D9A7ZX", "0D9B0ZX", "0D9B3ZX", "0D9B4ZX") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0D9B7ZX", "0D9B8ZX", "0D9C8ZX", "0DB40ZZ", "0DB43ZZ", "0DB44ZZ", "0DB47ZZ", "0DB58ZX") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DB60ZZ", "0DB63ZZ", "0DB64ZZ", "0DB67ZZ", "0DB68ZX", "0DB68ZZ", "0DB80ZX", "0DB80ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DB83ZX", "0DB83ZZ", "0DB84ZX", "0DB84ZZ", "0DB87ZX", "0DB87ZZ", "0DB88ZX", "0DB88ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DB90ZX", "0DB90ZZ", "0DB93ZX", "0DB93ZZ", "0DB94ZX", "0DB94ZZ", "0DB97ZX", "0DB97ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DB98ZX", "0DB98ZZ", "0DBA0ZX", "0DBA3ZX", "0DBA4ZX", "0DBA7ZX", "0DBA8ZX", "0DBB0ZX") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DBB3ZX", "0DBB4ZX", "0DBB7ZX", "0DBB8ZX", "0DBC8ZX", "0DC60ZZ", "0DC63ZZ", "0DC64ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DH602Z", "0DH603Z", "0DH60UZ", "0DH63UZ", "0DH64UZ", "0DH67UZ", "0DH68UZ", "0DJ03ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DJ07ZZ", "0DJ08ZZ", "0DJD4ZZ", "0DT40ZZ", "0DT44ZZ", "0DT47ZZ", "0DT48ZZ", "0DT70ZZ") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "0DT74ZZ", "0DT77ZZ", "0DT78ZZ", "6A550Z1", "8E0H30Z", "F0DZ8UZ", "G450", "G451") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "G458", "G459", "I2690", "I2692", "I2699", "I609", "I619", "I63019") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I63119", "I63139", "I6320", "I63219", "I6322", "I63239", "I6330", "I6340") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I6350", "I6359", "I6509", "I651", "I6529", "I658", "I659", "I6609") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I6619", "I6629", "I669", "I67848", "I6789", "I745", "I748", "I8000") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I8010", "I80209", "I80219", "I803", "I808", "I809", "I820", "I821") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I82220", "I82221", "I82290", "I82291", "I823", "I82409", "I82419", "I82429") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I82439", "I82449", "I82499", "I824Y9", "I824Z9", "I82509", "I82519", "I82529") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I82539", "I82549", "I82599", "I825Y9", "I825Z9", "I82609", "I82619", "I82629") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I82709", "I82719", "I82729", "I82819", "I82890", "I82891", "I8291", "I82A19") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "I82A29", "I82B19", "I82B29", "I82C19", "I82C29", "I999", "T800XXA", "T801XXA") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "T8040XA", "T80410A", "T80411A", "T80419A", "T8049XA", "T80A0XA", "T80A10A", "T80A11A") & num>1
+replace ind_comp_vasc=1 if inlist(diag, "T80A19A", "T80A9XA", "T81718A", "T81719A", "T8172XA", "T82817A", "T82818A") & num>1
+
+replace ind_comp_wound=1 if inlist(diag, "0T130ZB", "0T134ZB", "0T140ZB", "0T144ZB", "0T160Z6", "0T160Z7", "0T160Z8", "0T160ZA") & num>1
+replace ind_comp_wound=1 if inlist(diag, "0T160ZB", "0T164Z6", "0T164Z7", "0T164Z8", "0T164ZA", "0T164ZB", "0T170Z6", "0T170Z7") & num>1
+replace ind_comp_wound=1 if inlist(diag, "0T170Z8", "0T170ZA", "0T170ZB", "0T174Z6", "0T174Z7", "0T174Z8", "0T174ZA", "0T174ZB") & num>1
+replace ind_comp_wound=1 if inlist(diag, "0T180Z6", "0T180Z7", "0T180Z8", "0T180ZA", "0T180ZB", "0T184Z6", "0T184Z7", "0T184Z8") & num>1
+replace ind_comp_wound=1 if inlist(diag, "0T184ZA", "0T184ZB", "0TQ60ZZ", "0TQ63ZZ", "0TQ64ZZ", "0TQ67ZZ", "0TQ68ZZ", "0TQ70ZZ") & num>1
+replace ind_comp_wound=1 if inlist(diag, "0TQ73ZZ", "0TQ74ZZ", "0TQ77ZZ", "0TQ78ZZ", "3E00XGC", "6A4Z0ZZ", "6A600ZZ", "D7801") & num>1
+replace ind_comp_wound=1 if inlist(diag, "D7802", "D7821", "D7822", "E3601", "E3602", "G9731", "G9732", "G9751") & num>1
+replace ind_comp_wound=1 if inlist(diag, "G9752", "H59111", "H59112", "H59113", "H59119", "H59121", "H59122", "H59123") & num>1
+replace ind_comp_wound=1 if inlist(diag, "H59129", "H59311", "H59312", "H59313", "H59319", "H59321", "H59322", "H59323") & num>1
+replace ind_comp_wound=1 if inlist(diag, "H59329", "H9521", "H9522", "H9541", "H9542", "I97410", "I97411", "I97418") & num>1
+replace ind_comp_wound=1 if inlist(diag, "I9742", "I97610", "I97611", "I97618", "I9762", "J9561", "J9562", "J95830") & num>1
+replace ind_comp_wound=1 if inlist(diag, "J95831", "K650", "K651", "K652", "K653", "K654", "K658", "K659") & num>1
+replace ind_comp_wound=1 if inlist(diag, "K661", "K668", "K67", "K6812", "K6819", "K689", "K9161", "K9162") & num>1
+replace ind_comp_wound=1 if inlist(diag, "K91840", "K91841", "K91850", "K91858", "L7601", "L7602", "L7621", "L7622") & num>1
+replace ind_comp_wound=1 if inlist(diag, "M96810", "M96811", "M96830", "M96831", "N442", "N448", "N501", "N503") & num>1
+replace ind_comp_wound=1 if inlist(diag, "N508", "N51", "N5312", "N5314", "N9961", "N9962", "N99820", "N99821") & num>1
+replace ind_comp_wound=1 if inlist(diag, "R188", "R361", "T8130XA", "T8131XA", "T8132XA", "T8133XA", "T814XXA", "T8183XA") & num>1
+replace ind_comp_wound=1 if inlist(diag, "T888XXA") & num>1
+
+
+replace ind_comp_genitourinary=1 if inlist(diag, "0PJY0ZZ", "0PJY3ZZ", "0PJY4ZZ", "0T9000Z", "0T900ZZ", "0T9030Z", "0T903ZZ", "0T9040Z") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0T904ZZ", "0T9100Z", "0T910ZZ", "0T9130Z", "0T913ZZ", "0T9140Z", "0T914ZZ", "0TB00ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TB03ZZ", "0TB04ZZ", "0TB10ZZ", "0TB13ZZ", "0TB14ZZ", "0TBB0ZZ", "0TBB3ZZ", "0TBB4ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TJ50ZZ", "0TJB0ZZ", "0TJB4ZZ", "0TN00ZZ", "0TN03ZZ", "0TN04ZZ", "0TN07ZZ", "0TN08ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TN10ZZ", "0TN13ZZ", "0TN14ZZ", "0TN17ZZ", "0TN18ZZ", "0TN60ZZ", "0TN63ZZ", "0TN64ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TN70ZZ", "0TN73ZZ", "0TN74ZZ", "0TNB0ZZ", "0TNB3ZZ", "0TNB4ZZ", "0TNC0ZZ", "0TNC3ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TNC4ZZ", "0TQD0ZZ", "0TQD3ZZ", "0TQD4ZZ", "0TQD7ZZ", "0TQD8ZZ", "0TQDXZZ", "0TSC0ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TSC4ZZ", "0TSD0ZZ", "0TSD4ZZ", "0TUC07Z", "0TUC0JZ", "0TUC0KZ", "0TUC47Z", "0TUC4JZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0TUC4KZ", "0TUC77Z", "0TUC7JZ", "0TUC7KZ", "0TUC87Z", "0TUC8JZ", "0TUC8KZ", "0VT00ZZ") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "0WBH0ZZ", "0WBH3ZZ", "0WBH4ZZ", "0WJJ0ZZ", "0WJJ3ZZ", "0WJJ4ZZ", "3E013GC", "3E023GC") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "3E0K3GC", "5A12012", "N10", "N110", "N118", "N12", "N1330", "N134") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "N135", "N138", "N151", "N159", "N16", "N2884", "N2885", "N2886") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "N312", "N318", "N319", "N320", "N321", "N322", "N323", "N3281") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "N3289", "N329", "N340", "N341", "N342", "N343", "N360", "N3644") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "N451", "N452", "N453", "N454", "N51", "N99510", "N99511", "N99512") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "N99518", "N9989", "R338", "R339", "R3914", "T83090A", "T83098A", "T83198A") & num>1
+replace ind_comp_genitourinary=1 if inlist(diag, "T8329XA", "T8339XA", "T83498A") & num>1
+
+
+
+replace ind_comp_gastro=1 if inlist(diag, "0DQ80ZZ", "0DQ83ZZ", "0DQ84ZZ", "0DQ87ZZ", "0DQ88ZZ", "0DQE0ZZ", "0DQE3ZZ", "0DQE4ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0DQE7ZZ", "0DQE8ZZ", "0JH70MZ", "0JH73MZ", "0JH80MZ", "0JH83MZ", "0JPT0MZ", "0JPT3MZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0Q8D0ZZ", "0Q8D3ZZ", "0Q8D4ZZ", "0Q8F0ZZ", "0Q8F3ZZ", "0Q8F4ZZ", "0T130Z3", "0T130Z4") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0T130Z6", "0T130Z7", "0T130Z8", "0T130Z9", "0T130ZA", "0T130ZC", "0T130ZD", "0T144Z3") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0T144Z4", "0T144Z6", "0T144Z7", "0T144Z8", "0T144Z9", "0T144ZA", "0T144ZC", "0T144ZD") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0T820ZZ", "0T823ZZ", "0T824ZZ", "0TC37ZZ", "0TC38ZZ", "0TC47ZZ", "0TC48ZZ", "0TC67ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TC68ZZ", "0TC77ZZ", "0TC78ZZ", "0TH90MZ", "0TH93MZ", "0TH94MZ", "0TH97MZ", "0TH98MZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TL60CZ", "0TL60ZZ", "0TL63CZ", "0TL63ZZ", "0TL64CZ", "0TL64ZZ", "0TL67ZZ", "0TL68ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TL70CZ", "0TL70ZZ", "0TL73CZ", "0TL73ZZ", "0TL74CZ", "0TL74ZZ", "0TL77ZZ", "0TL78ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TP90MZ", "0TP93MZ", "0TP94MZ", "0TP97MZ", "0TP98MZ", "0TQ00ZZ", "0TQ03ZZ", "0TQ04ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TQ07ZZ", "0TQ08ZZ", "0TQ10ZZ", "0TQ13ZZ", "0TQ14ZZ", "0TQ17ZZ", "0TQ18ZZ", "0TQ30ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TQ33ZZ", "0TQ34ZZ", "0TQ37ZZ", "0TQ38ZZ", "0TQ40ZZ", "0TQ43ZZ", "0TQ44ZZ", "0TQ47ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TQ48ZZ", "0TQB0ZZ", "0TQB3ZZ", "0TQB4ZZ", "0TQB7ZZ", "0TQB8ZZ", "0TS00ZZ", "0TS04ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0TS10ZZ", "0TS14ZZ", "0TS20ZZ", "0TS24ZZ", "0W3R0ZZ", "0W3R3ZZ", "0W3R4ZZ", "0W3R7ZZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0W3R8ZZ", "0WQFXZ2", "0WQFXZZ", "0YQA0ZZ", "0YQA3ZZ", "0YQA4ZZ", "0YU707Z", "0YU70JZ") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0YU70KZ", "0YU747Z", "0YU74JZ", "0YU74KZ", "0YU807Z", "0YU80JZ", "0YU80KZ", "0YU847Z") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "0YU84JZ", "0YU84KZ", "6A550Z2", "A047", "K251", "K252", "K261", "K262") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "K263", "K353", "K520", "K521", "K522", "K5281", "K5282", "K5289") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "K529", "K560", "K561", "K562", "K563", "K5641", "K5649", "K565") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "K5660", "K5669", "K567", "K624", "K625", "K630", "K912", "K913") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "K9181", "K9182", "K9183", "K9186", "K9189", "K9400", "K9402", "K9403") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "K9409", "K9410", "K9412", "K9413", "K9419", "R150", "R151", "R152") & num>1
+replace ind_comp_gastro=1 if inlist(diag, "R159") & num>1
+
+
+
+replace ind_comp_neuro=1 if inlist(diag, "02B50ZZ", "02B53ZZ", "02B54ZZ", "02QA0ZZ", "02QA3ZZ", "02QA4ZZ", "02QF0ZZ", "02QF3ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "02QF4ZZ", "02QG0ZZ", "02QG3ZZ", "02QG4ZZ", "02QH0ZZ", "02QH3ZZ", "02QH4ZZ", "02QJ0ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "02QJ3ZZ", "02QJ4ZZ", "02RM0JZ", "02RM4JZ", "02U50JZ", "02U53JZ", "02U54JZ", "02UM0JZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "02UM3JZ", "02UM4JZ", "08J0XZZ", "08J1XZZ", "0DB60ZZ", "0DB63ZZ", "0DB67ZZ", "0DT70ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "0DT74ZZ", "0DT77ZZ", "0DT78ZZ", "4A07X0Z", "4A07X7Z", "4A07XBZ", "B30N0ZZ", "B30N1ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "B30NYZZ", "B803ZZZ", "B804ZZZ", "B805ZZZ", "B806ZZZ", "B807ZZZ", "B845ZZZ", "B846ZZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "B847ZZZ", "C8191ZZ", "C819YZZ", "C81YYZZ", "F09Z2ZZ", "F09Z3ZZ", "F0CZ0ZZ", "F0CZ1ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F0CZ2KZ", "F0CZ2LZ", "F0CZ2NZ", "F0CZ2PZ", "F0CZ2QZ", "F0CZ2SZ", "F0CZ2TZ", "F0CZ2YZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F0CZ2ZZ", "F0DZ0ZZ", "F0DZ1ZZ", "F0DZ2ZZ", "F0DZ5ZZ", "F0DZ8UZ", "F13Z0ZZ", "F13Z1ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F13Z2ZZ", "F13Z3ZZ", "F13Z4ZZ", "F13Z5ZZ", "F13Z6ZZ", "F13Z7ZZ", "F13Z8ZZ", "F13Z9ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F13ZBZZ", "F13ZCZZ", "F13ZDZZ", "F13ZFZZ", "F13ZGZZ", "F13ZHZZ", "F13ZJZZ", "F13ZMZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F13ZNZZ", "F13ZPZZ", "F13ZQZZ", "F14Z0ZZ", "F14Z1ZZ", "F14Z2ZZ", "F14Z3ZZ", "F14Z4ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F14Z5ZZ", "F14Z6ZZ", "F14Z7ZZ", "F14Z8ZZ", "F15Z0ZZ", "F15Z1ZZ", "F15Z2ZZ", "F15Z3ZZ") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "F15Z4ZZ", "F15Z5ZZ", "F15Z6ZZ", "F15Z7ZZ", "G038", "G5600", "G5610", "G5620") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "G5630", "G5640", "G5680", "G5690", "G5700", "G5710", "G5720", "G5730") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "G5740", "G5750", "G5760", "G5770", "G5780", "G5790", "G587", "G589") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "G970", "G9781", "G9782", "I6789", "I97811", "I97821", "M5412", "M5413") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "NoPCS", "S0410XA", "S0420XA", "S0430XA", "S0440XA", "S0450XA", "S0460XA", "S0470XA") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S04819A", "S04899A", "S049XXA", "S14101A", "S14102A", "S14103A", "S14104A", "S14105A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S14106A", "S14107A", "S14108A", "S14109A", "S14111A", "S14112A", "S14113A", "S14114A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S14115A", "S14116A", "S14117A", "S14118A", "S14121A", "S14122A", "S14123A", "S14124A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S14125A", "S14126A", "S14127A", "S14128A", "S14131A", "S14132A", "S14133A", "S14134A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S14135A", "S14136A", "S14137A", "S14138A", "S14151A", "S14152A", "S14153A", "S14154A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S14155A", "S14156A", "S14157A", "S14158A", "S142XXA", "S143XXA", "S145XXA", "S24101A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S24102A", "S24103A", "S24104A", "S24109A", "S24111A", "S24112A", "S24113A", "S24114A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S24131A", "S24132A", "S24133A", "S24134A", "S24151A", "S24152A", "S24153A", "S24154A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S242XXA", "S243XXA", "S244XXA", "S248XXA", "S249XXA", "S34109A", "S34139A", "S3421XA") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S3422XA", "S343XXA", "S344XXA", "S345XXA", "S346XXA", "S349XXA", "S4400XA", "S4410XA") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S4420XA", "S4430XA", "S4440XA", "S4450XA", "S448X9A", "S4490XA", "S5400XA", "S5410XA") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S5420XA", "S5430XA", "S6400XA", "S6410XA", "S6420XA", "S6430XA", "S6440XA", "S7400XA") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S7410XA", "S7420XA", "S748X9A", "S7490XA", "S8400XA", "S8410XA", "S8420XA", "S84809A") & num>1
+replace ind_comp_neuro=1 if inlist(diag, "S8490XA", "S9430XA", "S948X9A", "S9490XA") & num>1
+
+
+replace ind_comp_infect=1 if inlist(diag, "0QSL3ZZ", "0QSL4ZZ", "0QSLXZZ", "0QSM3ZZ", "0QSM4ZZ", "0QSMXZZ", "0QSN3ZZ", "0QSN4ZZ") & num>1
+replace ind_comp_infect=1 if inlist(diag, "0QSNXZZ", "0QSP3ZZ", "0QSP4ZZ", "0QSPXZZ", "3E0R3TZ", "3E0S3TZ", "8E0VX1D", "A403") & num>1
+replace ind_comp_infect=1 if inlist(diag, "A409", "A4101", "A4102", "A411", "A412", "A413", "A414", "A4150") & num>1
+replace ind_comp_infect=1 if inlist(diag, "A4151", "A4152", "A4153", "A4159", "A4189", "A419", "B007", "DWY18ZZ") & num>1
+replace ind_comp_infect=1 if inlist(diag, "DWY28ZZ", "DWY38ZZ", "DWY48ZZ", "DWY58ZZ", "DWY68ZZ", "J9502", "K6811", "K9422") & num>1
+replace ind_comp_infect=1 if inlist(diag, "R6520", "R7881", "T80211A", "T80212A", "T80219A", "T8022XA", "T8029XA", "T814XXA") & num>1
+replace ind_comp_infect=1 if inlist(diag, "T880XXA") & num>1
+
+
+
+replace ind_comp_misc=1 if inlist(diag, "0DQP0ZZ", "0DQP3ZZ", "0DQP4ZZ", "0DQP7ZZ", "0DQP8ZZ", "0HQ9XZZ", "0PBH0ZZ", "0PBH3ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0PBH4ZZ", "0PBJ0ZZ", "0PBJ3ZZ", "0PBJ4ZZ", "0PBK0ZZ", "0PBK3ZZ", "0PBK4ZZ", "0PBL0ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0PBL3ZZ", "0PBL4ZZ", "0PBM0ZZ", "0PBM3ZZ", "0PBM4ZZ", "0PBN0ZZ", "0PBN3ZZ", "0PBN4ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0PBP0ZZ", "0PBP3ZZ", "0PBP4ZZ", "0PBQ0ZZ", "0PBQ3ZZ", "0PBQ4ZZ", "0QH604Z", "0QH634Z") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0QH644Z", "0QH704Z", "0QH734Z", "0QH744Z", "0QH804Z", "0QH834Z", "0QH844Z", "0QH904Z") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0QH934Z", "0QH944Z", "0QHB04Z", "0QHB34Z", "0QHB44Z", "0QHC04Z", "0QHC34Z", "0QHC44Z") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TMD0ZZ", "0TMD4ZZ", "0TQB0ZZ", "0TQB3ZZ", "0TQB4ZZ", "0TQB7ZZ", "0TQB8ZZ", "0TQD0ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TQD3ZZ", "0TQD4ZZ", "0TQD7ZZ", "0TQD8ZZ", "0TQDXZZ", "0TRD07Z", "0TRD0JZ", "0TRD0KZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TRD47Z", "0TRD4JZ", "0TRD4KZ", "0TRD77Z", "0TRD7JZ", "0TRD7KZ", "0TRD87Z", "0TRD8JZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TRD8KZ", "0TRDX7Z", "0TRDXJZ", "0TRDXKZ", "0TSD0ZZ", "0TSD4ZZ", "0TUD07Z", "0TUD0JZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TUD0KZ", "0TUD47Z", "0TUD4JZ", "0TUD4KZ", "0TUD77Z", "0TUD7JZ", "0TUD7KZ", "0TUD87Z") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TUD8JZ", "0TUD8KZ", "0TUDX7Z", "0TUDXJZ", "0TUDXKZ", "0TVD0CZ", "0TVD0DZ", "0TVD0ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TVD3CZ", "0TVD3DZ", "0TVD3ZZ", "0TVD4CZ", "0TVD4DZ", "0TVD4ZZ", "0TVD7DZ", "0TVD7ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0TVD8DZ", "0TVD8ZZ", "0TVDXZZ", "0UQG0ZZ", "0UQG3ZZ", "0UQG4ZZ", "0UQG7ZZ", "0UQG8ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0VQ50ZZ", "0VQ53ZZ", "0VQ54ZZ", "0VQ5XZZ", "0W3R0ZZ", "0W3R3ZZ", "0W3R4ZZ", "0W3R7ZZ") & num>1
+replace ind_comp_misc=1 if inlist(diag, "0W3R8ZZ", "0WQFXZ2", "0WQFXZZ", "3E0134Z", "3E0234Z", "6A650ZZ", "8E0VX1C", "8E0VX63") & num>1
+replace ind_comp_misc=1 if inlist(diag, "8E0ZXY6", "A493", "B960", "B966", "B967", "B9681", "B9689", "E876") & num>1
+replace ind_comp_misc=1 if inlist(diag, "F0DZ8UZ", "H59029", "I959", "K912", "K9420", "K9422", "K9423", "K9429") & num>1
+replace ind_comp_misc=1 if inlist(diag, "N170", "N171", "N172", "N178", "N179", "R17", "R570", "R571") & num>1
+replace ind_comp_misc=1 if inlist(diag, "R578", "R579", "R600", "R601", "R609", "R6521", "T782XXA", "T8030XA") & num>1
+replace ind_comp_misc=1 if inlist(diag, "T80310A", "T80311A", "T80319A", "T8039XA", "T8040XA", "T80410A", "T80411A", "T80419A") & num>1
+replace ind_comp_misc=1 if inlist(diag, "T8049XA", "T8051XA", "T8052XA", "T8059XA", "T80A0XA", "T80A10A", "T80A11A", "T80A19A") & num>1
+replace ind_comp_misc=1 if inlist(diag, "T80A9XA", "T81509A", "T81519A", "T81529A", "T81539A", "T8161XA", "T8169XA", "T8182XA") & num>1
+replace ind_comp_misc=1 if inlist(diag, "T8189XA", "T819XXA", "T882XXA", "T883XXA") & num>1
+
+egen ind_comp_any=rowmax(ind_comp*)
+label var ind_comp_any "Any complication during index stay"
+drop diag diag_num
+
+foreach x of varlist ind_comp*{
+by bid_hrs_24 admit_date disch_date, sort: egen a=max(`x')
+replace `x'=a
+drop a
+}
+
+duplicates drop 
+
+tab ind_comp_any
+
+save "${intpath}/elective_surg_int.dta",replace
+
+
+
+
+
+
+H="*****************"
+
+
+H="trauma in past 12 months"
+use "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\March_abstract_elective_surg.dta", clear
+keep bid_hrs_24 admit_date disch_date
+duplicates drop
+joinby bid_hrs_24 using "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\icdtrauma.dta", unmatched(master)
+gen ind_trauma=!missing(xiss) & xiss>0 & inrange(index_date,admit_date-365,admit_date)
+tab ind_trauma
+keep bid_hrs_24 admit disch ind_trauma
+duplicates drop
+by bid admit, sort: egen a=max(ind_trauma)
+replace ind_trauma=a
+drop a
+duplicates drop
+rename ind_trauma ind_trauma_n12m
+label var ind_t "Any trauma admission n12m"
+merge 1:1 bid admit disch using "D:\HRS\Projects\surgery\zc_surgery_and_serious_illness\data\int_data\March_abstract_elective_surg.dta", nogen
+
+tab ind_trauma_n12m
+
+H="*******************"
+
+
+H="elective surg final sample"
+use "${intpath}/elective_surg_int.dta",clear
+
+gen ind_severe_trauma_final=(ind_severe_trauma==1 | ind_tbi==1)
+
+gen comorbidity=charls_index_wt_0d_n12m>=2
+
+gen surgical_specialty_temp=0
+replace surgical_specialty_temp=1 if inlist(substr(prcdrcd, 2,1),"0","1")
+replace surgical_specialty_temp=2 if inlist(substr(prcdrcd, 2,1),"K","L","M","N","O","P","Q","R","S")
+replace surgical_specialty_temp=3 if inlist(substr(prcdrcd, 2,1),"2","3","4","5","6","7") | inlist(substr(prcdrcd, 2,1),"B","D","F","G","H","J")
+replace surgical_specialty_temp=4 if inlist(substr(prcdrcd, 2,1),"8","9","C","T","U","V")
+replace surgical_specialty_temp=5 if inlist(substr(prcdrcd, 2,1),"W","X","Y")
+tab surgical_specialty_temp,m
+
+gen surgical_specialty=.
+replace surgical_specialty=1 if surgical_specialty_temp==2
+replace surgical_specialty=2 if surgical_specialty_temp==3
+replace surgical_specialty=3 if surgical_specialty_temp==0 | surgical_specialty_temp==1 | surgical_specialty_temp==4 | surgical_specialty_temp==5
+label define surgical_specialty 1 "Ortho" 2 "General" 3 "Others"
+label values surgical_specialty surgical_specialty
+
+replace surgical_specialty=. if admit_date<td(01oct2015)
+
+recode helphours_3cat(.=1)
+recode informal_final(.=0)
+
+//listwise deletion for table 2& table 3 sample 
+sum home_discharge agenew gender race_eth education nw_quart ind_marital nhres ///
+ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma_final ind_vunerable ///
+ind_frail comorbidity adl_independent_core iadl_independent_core ///
+prob_dem timefromsy informal_final pain_binary cesd_binary helphours_3cat informal_final
+
+local var home_discharge agenew gender race_eth education nw_quart ind_marital nhres ///
+ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma_final ind_vunerable ///
+ind_frail comorbidity adl_independent_core iadl_independent_core ///
+prob_dem timefromsy informal_final pain_binary cesd_binary helphours_3cat informal_final
+egen nmiss=rowmiss(`var')
+tab nmiss
+
+keep if nmiss==0
+drop if race_eth==3
+
+//examine surgical specialty 
+tab surgical_specialty,m
+tab surgical_specialty home_discharge,row
+tab surgical_specialty ind_comp_any,row
+
+save "${intpath}/elective_surg_1343.dta",replace
+
+
+
+H="Table 1 "
+use "${intpath}/elective_surg_1343.dta",clear
+
+tab agenew
+tab gender
+tab race_eth
+tab education
+tab nw_quart
+sum age
+tab ind_marital
+tab nhres
+tab ind_dem
+tab ind_canc
+tab ind_esrd
+tab ind_chf
+tab ind_copd
+tab ind_liver
+tab ind_severe_trauma_final
+tab ind_vunerable
+tab ind_frail
+tab nhres
+
+egen si_num=rowtotal(ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma_final ind_vunerable ind_frail nhres)
+tab si_num
+gen si_1plus=si_num>1
+tab si_1plus
+gen si_2plus=si_num>2
+tab si_2plus
+
+tab comorbidity
+
+tab surgical_specialty
+
+tab adl_independent_core 
+tab iadl_independent_core
+tab prob_dem
+
+sum timefromsy
+
+tab pain_binary 
+tab cesd_binary 
+tab pain_binary cesd_binary
+
+tab helphours_3cat
+tab informal_final
+
+tab home_discharge
+tab ind_comp_any
+sum loscnt
+
+//in-hospital mortality
+gen ih_mortality=inrange(deathdt,admit_date,disch_date)
+tab ih_mortality
+
+save "${intpath}/elective_surg_table1sample.dta",replace 
+
+
+H="Table 2"
+use "${intpath}/elective_surg_1343.dta",clear
+
+//in-hospital complications 
+tab ind_comp_any
+tab agenew ind_comp_any,chi2 row
+tab gender ind_comp_any,chi2 row
+tab ind_marital ind_comp_any,chi2 row
+tab race_eth ind_comp_any,chi2 row
+tab education ind_comp_any,chi2 row
+tab nhres ind_comp_any,chi2 row
+tab nw_quart ind_comp_any,chi2 row
+tab ind_marital ind_comp_any,chi2 row
+
+tab ind_dem ind_comp_any,chi2 row
+tab ind_canc ind_comp_any,chi2 row
+tab ind_esrd ind_comp_any,chi2 row
+tab ind_chf ind_comp_any,chi2 row
+tab ind_copd ind_comp_any,chi2 row
+tab ind_liver ind_comp_any,chi2 row
+tab ind_severe_trauma ind_comp_any,chi2 row
+tab ind_tbi ind_comp_any,chi2 row
+tab ind_vunerable ind_comp_any,chi2 row
+tab ind_frail ind_comp_any,chi2 row
+tab nhres ind_comp_any,chi2 row
+
+tab ind_severe_trauma_final ind_comp_any,chi2 row
+
+tab charls_index_wt_0d_n12m
+tab comorbidity
+tab comorbidity ind_comp_any,chi2 row
+
+tab adl_independent_core ind_comp_any,chi2 row
+tab iadl_independent_core ind_comp_any,chi2 row
+tab prob_dem ind_comp_any,chi2 row
+tab ind_caregiver ind_comp_any,chi2 row
+
+ttest timefromsy,by(ind_comp_any)
+
+tab surgical_specialty ind_comp_any,chi2 row
+
+tab pain_binary ind_comp_any,chi2 row
+tab cesd_binary ind_comp_any,chi2 row
+
+tab informal_final ind_comp_any,chi2 row
+
+//home discharge
+tab  home_discharge
+tab agenew  home_discharge,chi2 row
+tab gender  home_discharge,chi2 row
+tab ind_marital home_discharge,chi2 row
+tab race_eth  home_discharge,chi2 row
+tab education  home_discharge,chi2 row
+tab ind_marital home_discharge,chi2 row
+tab nhres  home_discharge,chi2 row
+tab nw_quart  home_discharge,chi2 row
+
+tab ind_dem  home_discharge,chi2 row
+tab ind_canc  home_discharge,chi2 row
+tab ind_esrd  home_discharge,chi2 row
+tab ind_chf  home_discharge,chi2 row
+tab ind_copd  home_discharge,chi2 row
+tab ind_liver  home_discharge,chi2 row
+tab ind_severe_trauma  home_discharge, chi2 row
+tab ind_tbi  home_discharge,chi2 row
+tab ind_vunerable  home_discharge,chi2 row
+tab ind_frail  home_discharge,chi2 row
+tab ind_severe_trauma_final home_discharge,chi2 row
+tab nhres home_discharge,chi2 row
+
+tab charls_index_wt_0d_n12m
+tab comorbidity
+tab comorbidity  home_discharge,chi2 row
+
+tab surgical_specialty  home_discharge,chi2 row
+tab adl_independent_core  home_discharge,chi2 row
+tab iadl_independent_core  home_discharge,chi2 row
+tab prob_dem  home_discharge,chi2 row
+tab hasany_caregiver  home_discharge,chi2 row
+tab informal_final home_discharge,chi2 row
+
+ttest timefromsy,by( home_discharge)
+
+tab pain_binary  home_discharge,chi2 row
+tab cesd_binary  home_discharge,chi2 row
+tab unpaid_hours  home_discharge,chi2 row
+
+//hospital days
+sum loscnt
+oneway loscnt agenew
+tab gender, sum(loscnt)
+oneway loscnt gender 
+
+tab agenew, sum(loscnt)
+oneway agenew loscnt
+tab race_eth, sum(loscnt)
+oneway race_eth loscnt
+
+tab education,sum(loscnt)
+oneway education loscnt
+
+tab nw_quart,sum(loscnt)
+oneway nw_quart loscnt
+
+tab ind_marital,sum(loscnt)
+oneway ind_marital loscnt
+
+tab nhres,sum(loscnt)
+oneway nhres loscnt
+
+tab ind_marital,sum(loscnt)
+oneway ind_marital loscnt
+
+tab surgical_specialty,sum(loscnt)
+oneway surgical_specialty loscnt
+
+ttest loscnt ,by(ind_dem) 
+ttest loscnt ,by(ind_canc) 
+ttest loscnt,by(ind_esrd) 
+ttest loscnt ,by(ind_chf   ) 
+ttest loscnt ,by(ind_copd ) 
+ttest loscnt  ,by(ind_liver) 
+ttest loscnt ,by(ind_severe_trauma_final ) 
+ttest loscnt ,by(ind_tbi ) 
+ttest loscnt ,by(ind_vunerable ) 
+ttest loscnt ,by(ind_frail ) 
+ttest loscnt, by(nhres)
+
+ttest loscnt ,by(comorbidity) 
+ttest loscnt ,by(adl_independent_core) 
+ttest loscnt ,by(iadl_independent_core) 
+ttest loscnt, by(hasany_caregiver)
+ttest loscnt, by(unpaid)
+
+ttest loscnt  ,by(prob_dem) 
+pwcorr loscnt timefromsy,sig
+ttest loscnt,by(pain_binary) 
+ttest loscnt ,by(cesd_binary) 
+
+
+tab informal_final,sum(loscnt)
+oneway informal_final loscnt
+
+tab surgical_specialty,sum(loscnt)
+oneway surgical_specialty loscnt
+
+save "${intpath}/elective_surg_table2sample.dta",replace
+
+
+
+
+
+H="Table 3"
+use "${intpath}/elective_surg_1343.dta",clear
+
+gen home_discharge_reverse=home_discharge==0
+tab home_discharge
+tab home_discharge_reverse
+
+//adjusted
+logistic ind_comp_any i.agenew i.gender i.race_eth i.education i.nw_quart i.ind_marital ///
+i.comorbidity i.adl_independent_core i.iadl_independent_core ///
+i.prob_dem i.pain_binary i.cesd_binary i.informal_final
+
+logistic home_discharge_reverse i.agenew i.gender i.race_eth i.education i.nw_quart i.ind_marital ///
+i.comorbidity i.adl_independent_core i.iadl_independent_core ///
+i.prob_dem i.pain_binary i.cesd_binary i.informal_final
+
+nbreg loscnt i.agenew i.gender i.race_eth i.education i.nw_quart i.ind_marital ///
+i.comorbidity i.adl_independent_core i.iadl_independent_core ///
+i.prob_dem i.pain_binary i.cesd_binary i.informal_final,irr
+
+
+//unadjusted
+logistic ind_comp_any i.pain_binary 
+logistic ind_comp_any i.cesd_binary 
+logistic ind_comp_any i.informal_final
+
+logistic home_discharge_reverse i.pain_binary 
+logistic home_discharge_reverse i.cesd_binary 
+logistic home_discharge_reverse i.informal_final
+
+nbreg loscnt i.informal_final,irr
+nbreg loscnt i.cesd_binary,irr
+nbreg loscnt i.pain_binary,irr
+
+save "${intpath}/elective_surg_table3sample.dta",replace
+
+H="sensitivity analysis"
+use "${intpath}/elective_surg_1343.dta",clear
+
+//# of repeated admissions 
+by bid_hrs_24, sort: gen n_admit=_N
+gen multiple_admit=n_admit>1
+tab multiple_admit
+
+by bid_hrs_24: gen unique_admit=_n==1
+tab multiple_admit if unique_admit==1
+
+
+//# of multiple procedures in an admission 
+
+//# of multiple admissions within a year 
+by bid_hrs_24 year, sort: gen mul_ivw=_N>1
+tab mul_ivw
+
+by bid_hrs_24 year, sort: gen unique_ivw=_n==1
+tab mul_ivw if unique_ivw==1
+
+H="table 2, putexcel"
+
+
+use "${intpath}/elective_surg_fortable2.dta",clear
+
+gen surgical_specialty=inlist(substr(prcdrcd, 2,1),"0","1")
+
+replace surgical_specialty=2 if inlist(substr(prcdrcd, 2,1),"K","L","M","N","O","P","Q","R","S")
+
+replace surgical_specialty=3 if inlist(substr(prcdrcd, 2,1),"2","3","4","5","6","7") | inlist(substr(prcdrcd, 2,1),"B","D","F","G","H","J")
+
+replace surgical_specialty=4 if inlist(substr(prcdrcd, 2,1),"8","9","C","T","U","V")
+
+replace surgical_specialty=5 if inlist(substr(prcdrcd, 2,1),"W","X","Y")
+
+replace surgical_specialty=4 if inlist(surgical_specialty,1,5,0)
+replace surgical_specialty=surgical_specialty-1
+label define surgical_specialty 1 "Orthopedic" 2 "General" 3 "Other"
+label values surgical_specialty surgical_specialty
+label var surgical_specialty "Surgical Specialty"
+label define prob_dem 0 "No dementia" 1 "Probable dementia"
+label values prob_dem prob_dem
+label define pain_binary 0 "None/mild" 1 "Moderate/severe"
+label values pain_binary pain_binary 
+label define nhres 0 "Community" 1 "NH resident"
+label values nhres nhres
+
+gen comorbidity=charls_index_wt_0d_n12m>=2
+
+local catvars1 agenew
+
+local ivars1   
+local catvars2 gender race_eth education nhres 
+local ivars2 
+local catvars3 nw_quart 
+local ivars3 ind_dem ind_canc ind_esrd ind_chf ind_copd ind_liver ind_severe_trauma ind_tbi ind_vunerable ind_frail nhres 
+local catvars4 comorbidity surgical_specialty 
+local ivars4 adl_independent_core iadl_independent_core 
+local catvars5 prob_dem ind_caregiver 
+local cvars5 timefromsy 
+local catvars6 pain_binary cesd_binary helphours
+
+
+forvalues i=1/6 {
+foreach x of varlist `ivars`i'' `cvars`i'' `catvars`i'' {
+qui sum gender if missing(`x')
+di "`x'" `=r(N)'
+}
+}
+
+replace ind_severe_trauma=0 if missing(ind_severe_trauma)
+replace ind_tbi=0 if missing(ind_tbi)
+
+label copy P agenew
+label copy  e race_eth
+label copy k education
+label copy r ind_caregiver
+label define gender 0 "Male" 1 "Female"
+label values gender gender
+
+label define comorbidity 0 "<2 comorbidities" 1 "2+"
+
+foreach x of varlist agenew gender race_eth education ind_caregiver {
+	label values `x' `x'
+}
+
+label define nw_quart 1 "Lowest quartile" 2 "2nd" 3 "3rd" 4 "Top"
+
+forvalues i=1/6 {
+	foreach x of local catvars`i' {
+		di "`x'"
+		local `x'
+		levelsof `x', local(levels)
+		foreach l of local levels {
+			gen `x'`l'=`x'==`l' if !missing(`x')
+			local lab : label `x' `l'
+			label var `x'`l' "`lab'"
+			local `x' ``x'' `x'`l'
+}
+		di "``x''"
+		local cativars`i' `cativars`i'' ``x''
+}
+}
+
+local outc ind_comp_any home_discharge loscnt
+
+putexcel set "${outpath}\elective_surg_table_2.xlsx", replace
+
+local r=3
+local c=2
+
+tokenize A B C D E F G H I J  K  L M N O P
+
+putexcel A1:I1="Table 2", merge
+putexcel B2="No complications" C2="Any complications" D2="P-value" E2="Non-home discharge" F2="Home discharge" G2="P-value" H2="LOS" I2="P-value"
+
+forvalues i=1/6 {
+	foreach x of local catvars`i' {
+		putexcel A`r'="`x'"
+		foreach y of local outc {
+				if "`y'"!="loscnt" { 
+				tab `x' `y', chi2
+					putexcel ``=`c'+2''`r'=(round(r(p),.000)), nformat(0.000)
+					
+}
+				else {
+					reg `y' i.`x'
+					putexcel ``=`c'+1''`r' =(Ftail(e(df_m),e(df_r),e(F))), nformat(0.000)
+}
+		local c=`c'+3
+		}
+		local c=2
+					
+					local r=`r'+1
+		
+		foreach z of local `x' {
+			local lab : var label `z'
+			putexcel A`r'="`lab'"
+			foreach y of local outc {
+				sum `y' if `z'==1 
+				if "`y'"!="loscnt" { 
+					putexcel ``c''`r'=(round((1-r(mean))*100,.00)), nformat(0.00)
+					putexcel ``=`c'+1''`r'=(round((r(mean))*100,.00)), nformat(0.00)
+
+				}
+				else {
+					putexcel ``=`c'+0''`r'=(round((r(mean)),.00)), nformat(0.00)
+
+				}				
+				local c=`c'+3
+}
+			local r=`r'+1
+			local c=2
+}
+}
+		foreach x of local ivars`i' {
+			local lab : var label `x'
+			putexcel A`r'="`x'"
+			foreach y of local outc {
+				sum `y' if `x'==1 
+				if "`y'"!="loscnt" { 
+					putexcel ``c''`r'=(round((1-r(mean))*100,.00)), nformat(0.00)
+					putexcel ``=`c'+1''`r'=(round((r(mean))*100,.00)), nformat(0.00)
+					tab `y' `x', chi2
+					putexcel ``=`c'+2''`r'=(round(r(p),.000)), nformat(0.000)
+				}
+				else {
+					putexcel ``=`c'+0''`r'=(round((r(mean)),.00)), nformat(0.00)
+					ttest `y', by(`x')
+					putexcel ``=`c'+1''`r'=(round(r(p),.000)), nformat(0.000)
+				}				
+				local c=`c'+3
+}
+			local r=`r'+1
+			local c=2
+}
+		foreach x of local cvars`i' {
+			local lab : var label `x'
+			putexcel A`r'="`x'"
+			foreach y of local outc {
+				if "`y'"!="loscnt" { 
+					sum `x' if `y'==0
+					putexcel ``c''`r'=(round((r(mean)),.00)), nformat(0.00)
+					sum `x' if `y'==1 
+					putexcel ``=`c'+1''`r'=(round((r(mean)),.00)), nformat(0.00)
+					ttest `x', by(`y')
+					putexcel ``=`c'+2''`r'=(round(r(p),.000)), nformat(0.000)
+				}
+		
+				local c=`c'+3
+}
+			local r=`r'+1
+			local c=2
+}
+}
+
+local r=3
+local c=2
+				
+forvalues i=1/6 {
+	foreach x of local catvars`i' {
+		putexcel A`r'="`x'"
+		local r=`r'+1
+		foreach z of local `x' {
+			local lab : var label `z'
+			putexcel A`r'="`lab'"
+			foreach y of local outc {
+				sum `y' if `z'==1 
+				if inlist(r(sum),1,25) | inlist(r(N)-r(sum),1,25) { 
+					putexcel ``c''`r'="NR"
+					putexcel ``=`c'+1''`r'="NR"
+}
+			
+				local c=`c'+3
+}
+			local r=`r'+1
+			local c=2
+}
+}
+		foreach x of local ivars`i' {
+			local lab : var label `x'
+			putexcel A`r'="`x'"
+			foreach y of local outc {
+				sum `y' if `x'==1 
+				if inlist(r(sum),1,25) | inlist(r(N)-r(sum),1,25) { 
+					putexcel ``c''`r'="NR"
+					putexcel ``=`c'+1''`r'="NR"
+}
+					
+				local c=`c'+3
+}
+			local r=`r'+1
+			local c=2
+}
+
+foreach x of local cvars`i' {
+	local r=`r'+1
+}
+
+}
+
+				
+				
+
+
+H="kdensity, helphours"
+replace hlphrs_i=720 if hlphrs_i>720 & hlphrs_i!=.
+kdensity hlphrs_i
+summarize hlphrs_i,d
